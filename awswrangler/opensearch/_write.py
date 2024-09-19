@@ -138,10 +138,10 @@ def _get_documents_w_json_path(documents: list[Mapping[str, Any]], json_path: st
     return output_documents
 
 
-def _get_refresh_interval(client: "opensearchpy.OpenSearch", index: str) -> Any:
+def _get_refresh_interval(client: "opensearchpy.OpenSearch", index: str, **kwargs) -> Any:
     url = f"/{index}/_settings"
     try:
-        response = client.transport.perform_request("GET", url)
+        response = client.transport.perform_request("GET", url, **kwargs)
         index_settings = response.get(index, {}).get("index", {})
         refresh_interval = index_settings.get("refresh_interval", _DEFAULT_REFRESH_INTERVAL)
         return refresh_interval
@@ -149,11 +149,12 @@ def _get_refresh_interval(client: "opensearchpy.OpenSearch", index: str) -> Any:
         return _DEFAULT_REFRESH_INTERVAL
 
 
-def _set_refresh_interval(client: "opensearchpy.OpenSearch", index: str, refresh_interval: Any | None) -> Any:
+def _set_refresh_interval(client: "opensearchpy.OpenSearch", index: str, refresh_interval: Any | None, **kwargs) -> Any:
+    headers = {"content-type": "application/json", **kwargs.get("headers", {})}
     url = f"/{index}/_settings"
     body = {"index": {"refresh_interval": refresh_interval}}
     try:
-        return client.transport.perform_request("PUT", url, headers={"content-type": "application/json"}, body=body)
+        return client.transport.perform_request("PUT", url, headers=headers, body=body)
     except opensearchpy.exceptions.RequestError:
         return None
 
@@ -161,8 +162,9 @@ def _set_refresh_interval(client: "opensearchpy.OpenSearch", index: str, refresh
 def _disable_refresh_interval(
     client: "opensearchpy.OpenSearch",
     index: str,
+    **kwargs
 ) -> Any:
-    return _set_refresh_interval(client=client, index=index, refresh_interval="-1")
+    return _set_refresh_interval(client=client, index=index, refresh_interval="-1", **kwargs)
 
 
 @_utils.check_optional_dependency(opensearchpy, "opensearchpy")
@@ -615,8 +617,8 @@ https://opendistro.github.io/for-elasticsearch-docs/docs/elasticsearch/rest-api-
             ).start()
         for i, bulk_chunk_documents in enumerate(actions):
             if i == 1:  # second bulk iteration, in case the index didn't exist before
-                refresh_interval = _get_refresh_interval(client, index)
-                _disable_refresh_interval(client, index)
+                refresh_interval = _get_refresh_interval(client, index, **kwargs)
+                _disable_refresh_interval(client, index, **kwargs)
             _logger.debug("running bulk index of %s documents", len(bulk_chunk_documents))
             bulk_kwargs = {
                 "ignore_status": ignore_status,
@@ -653,8 +655,13 @@ https://opendistro.github.io/for-elasticsearch-docs/docs/elasticsearch/rest-api-
                 "Read more here: https://aws.amazon.com/premiumsupport/knowledge-center/resolve-429-error-es"
             )
             raise e
+        else:
+            _logger.error(
+                f"Unhandled TransportError (HTTP {e.status_code}): {e}"
+            )
+            raise e
 
     finally:
-        _set_refresh_interval(client, index, refresh_interval)
+        _set_refresh_interval(client, index, refresh_interval, **kwargs)
 
     return {"success": success, "errors": errors}
